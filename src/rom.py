@@ -114,19 +114,29 @@ class ROMOperators:
 def _assemble_convection_tensor(problem: NavierStokesProblem,
                                 Phi_u: np.ndarray) -> np.ndarray:
     """Build ``C_r`` such that ``sum_{j,k} C_r[i,j,k] a_j a_k`` equals
-    :math:`\\int (u_r\\cdot\\nabla u_r)\\cdot\\phi_i^{POD}\\,dx`."""
+    \int (u_r \cdot \nabla u_r) \cdot \phi_i^{POD} \, dx.
+    """
     r = Phi_u.shape[1]
     V = problem.V
     C_r = np.zeros((r, r, r))
+    
     u_known = Function(V)
     u_tr = TrialFunction(V)
     v_te = TestFunction(V)
-    for j in tqdm(range(r), desc="Convection tensor"):
-        u_known.vector().set_local(Phi_u[:, j])
+    
+    for k in tqdm(range(r), desc="Convection tensor"):
+        # Set known function to the k-th basis mode
+        u_known.vector().set_local(Phi_u[:, k])
         u_known.vector().apply("insert")
-        M_j_form = inner(dot(grad(u_tr), u_known), v_te) * dx
-        M_j = fenics_matrix_to_csr(assemble(M_j_form))
-        C_r[:, j, :] = Phi_u.T @ (M_j @ Phi_u)
+        
+        # M_k corresponds to advecting *by* phi_k
+        # inner(dot(grad(u_tr), u_known), v_te) -> (phi_k . grad(phi_j)) . phi_i
+        M_k_form = inner(dot(grad(u_tr), u_known), v_te) * dx
+        M_k = fenics_matrix_to_csr(assemble(M_k_form))
+        
+        # C_r[:, j, k] -> i is rows of Phi_u.T, j is cols of Phi_u
+        C_r[:, :, k] = Phi_u.T @ (M_k @ Phi_u)
+        
     return C_r
 
 

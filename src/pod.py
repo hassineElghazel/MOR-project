@@ -188,10 +188,14 @@ class SupremizerEnricher:
             S_sup[:, j] = s.vector().get_local()
         return S_sup
 
+    
     @staticmethod
     def enrich(S_u: np.ndarray, S_sup: np.ndarray) -> np.ndarray:
         """Concatenate primary velocity snapshots with supremizer snapshots."""
-        return np.concatenate([S_u, S_sup], axis=1)
+        # Scale supremizers so their maximum amplitude matches the velocity snapshots.
+        # This prevents the SVD from discarding them as low-energy noise.
+        scale = np.max(np.abs(S_u)) / max(np.max(np.abs(S_sup)), 1e-12)
+        return np.concatenate([S_u, S_sup * scale], axis=1)
 
 
 # ==========================================================================
