@@ -57,19 +57,13 @@ class ForcingExpression(UserExpression):
         self.mu1 = float(mu1)
 
     def eval(self, values, x):
+        # f(x; mu1) = mu1 * (sin(pi*x0)*sin(pi*x1), cos(pi*x0)*cos(pi*x1))
+        # Affinely parameterised in mu1 → low-dimensional solution manifold.
         m1 = self.mu1
         pi = np.pi
         x0, x1 = x[0], x[1]
-        values[0] = (
-            -(m1 ** 3 * pi ** 2 * np.cos(m1 ** 2 * pi * x0) - m1 ** 2 * pi ** 2)
-            * np.sin(m1 * pi * x1) * np.cos(m1 * pi * x1)
-            + m1 * pi * np.cos(m1 * pi * x0) * np.cos(m1 * pi * x1)
-        )
-        values[1] = (
-            -(-m1 ** 3 * pi ** 2 * np.cos(m1 ** 2 * pi * x1) + m1 ** 2 * pi ** 2)
-            * np.sin(m1 * pi * x0) * np.cos(m1 * pi * x0)
-            + (-m1 * pi * np.sin(m1 * pi * x0) * np.sin(m1 * pi * x1))
-        )
+        values[0] = m1 * np.sin(pi * x0) * np.sin(pi * x1)
+        values[1] = m1 * np.cos(pi * x0) * np.cos(pi * x1)
 
     def value_shape(self):
         return (2,)

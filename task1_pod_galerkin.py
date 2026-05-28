@@ -63,20 +63,21 @@ def main() -> None:
     print(f"Mean FOM solve (training): {snapshots.times.mean():.3f}s  "
           f"(min {snapshots.times.min():.3f}, max {snapshots.times.max():.3f})")
 
-    # --- 4. Supremizer enrichment -----------------------------------
+    # --- 4. Supremizer snapshots ------------------------------------
     sup_enricher = SupremizerEnricher(problem)
     S_sup = sup_enricher.compute(snapshots.S_p)
-    S_u_enriched = SupremizerEnricher.enrich(snapshots.S_u, S_sup)
-    print(f"Velocity snapshots enriched: "
-          f"{snapshots.S_u.shape[1]} -> {S_u_enriched.shape[1]} columns")
+    print(f"Computed {S_sup.shape[1]} supremizer snapshots")
 
-    # --- 5. POD bases -----------------------------------------------
-    pod_u = PODBasis.from_snapshots(S_u_enriched, problem.Mu,
-                                    energy_threshold=config.energy_threshold,
-                                    name="u")
+    # --- 5. POD bases (separate POD on velocity and supremizers) ----
+    pod_u = PODBasis.from_velocity_and_supremizers(
+        snapshots.S_u, S_sup, problem.Mu,
+        energy_threshold=config.energy_threshold, name="u",
+    )
     pod_p = PODBasis.from_snapshots(snapshots.S_p, problem.Mp,
                                     energy_threshold=config.energy_threshold,
                                     name="p")
+    print(f"Velocity basis: r_primary={pod_u.r_primary}, "
+          f"r_sup={pod_u.r_sup}, r_u_total={pod_u.r}")
     truncations = {lvl: (pod_u.modes_for_energy(lvl), pod_p.modes_for_energy(lvl))
                    for lvl in config.energy_levels}
     for lvl, (ru, rp) in truncations.items():

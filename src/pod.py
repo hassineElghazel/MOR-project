@@ -188,14 +188,17 @@ class SupremizerEnricher:
             S_sup[:, j] = s.vector().get_local()
         return S_sup
 
-    
     @staticmethod
     def enrich(S_u: np.ndarray, S_sup: np.ndarray) -> np.ndarray:
-        """Concatenate primary velocity snapshots with supremizer snapshots."""
-        # Scale supremizers so their maximum amplitude matches the velocity snapshots.
-        # This prevents the SVD from discarding them as low-energy noise.
-        scale = np.max(np.abs(S_u)) / max(np.max(np.abs(S_sup)), 1e-12)
-        return np.concatenate([S_u, S_sup * scale], axis=1)
+        """Concatenate primary velocity snapshots with supremizer snapshots (unscaled).
+
+        Kept for completeness; the preferred path is
+        :meth:`PODBasis.from_velocity_and_supremizers`, which performs separate
+        POD on each block before concatenating the *bases*. Joint-SVD on
+        concatenated snapshots tends to mix velocity and supremizer directions
+        unfavourably.
+        """
+        return np.concatenate([S_u, S_sup], axis=1)
 
 
 # ==========================================================================
@@ -215,6 +218,8 @@ class PODBasis:
     r: int                             # number of retained modes
     name: str = "u"
     energy_threshold: float = 0.9999
+    r_primary: int = 0                 # primary modes (velocity) when supremizer-enriched
+    r_sup: int = 0                     # supremizer modes appended after the primary ones
 
     # ---- factory ----
     @classmethod
@@ -251,18 +256,68 @@ class PODBasis:
         Phi = _m_gram_schmidt(Phi, M_inner)
 
         return cls(Phi=Phi, sigmas=sigmas, cum_energy=cum, r=r,
-                   name=name, energy_threshold=energy_threshold)
+                   name=name, energy_threshold=energy_threshold,
+                   r_primary=r, r_sup=0)
+
+    @classmethod
+    def from_velocity_and_supremizers(
+        cls,
+        S_u: np.ndarray,
+        S_sup: np.ndarray,
+        M_inner: sp.csr_matrix,
+        energy_threshold: float = 0.9999,
+        name: str = "u",
+    ) -> "PODBasis":
+        """Textbook supremizer-enriched velocity POD (Ballarin-Rozza style).
+
+        Runs an independent energy-truncated POD on the velocity snapshots and
+        on the supremizer snapshots, then M-orthonormalises the concatenation
+        ``[Phi_u^primary | Phi_u^sup]``. Storing the primary block first keeps
+        the truncation API intuitive (drop supremizers last).
+        """
+        pod_primary = cls.from_snapshots(S_u, M_inner,
+                                         energy_threshold=energy_threshold,
+                                         name=name)
+        pod_sup = cls.from_snapshots(S_sup, M_inner,
+                                     energy_threshold=energy_threshold,
+                                     name=f"{name}_sup")
+        Phi = np.concatenate([pod_primary.Phi, pod_sup.Phi], axis=1)
+        Phi = _m_gram_schmidt(Phi, M_inner)
+        # Some columns may collapse to zero after orthogonalisation; drop them.
+        norms = np.linalg.norm(Phi, axis=0)
+        keep = norms > 1e-12
+        Phi = Phi[:, keep]
+        r_primary = int(keep[: pod_primary.r].sum())
+        r_sup = int(keep[pod_primary.r:].sum())
+        return cls(
+            Phi=Phi,
+            sigmas=pod_primary.sigmas,
+            cum_energy=pod_primary.cum_energy,
+            r=Phi.shape[1],
+            name=name,
+            energy_threshold=energy_threshold,
+            r_primary=r_primary,
+            r_sup=r_sup,
+        )
 
     # ---- queries ----
     def truncate(self, r: int) -> "PODBasis":
-        """Return a copy keeping only the first ``r`` modes."""
+        """Return a copy keeping only the first ``r`` modes.
+
+        Primary modes come first, supremizer modes last; truncating below
+        ``r_primary`` drops supremizers entirely.
+        """
         r = max(1, min(r, self.Phi.shape[1]))
+        new_primary = min(r, self.r_primary or r)
+        new_sup = max(0, r - new_primary)
         return PODBasis(
             Phi=self.Phi[:, :r].copy(),
             sigmas=self.sigmas.copy(),
             cum_energy=self.cum_energy.copy(),
             r=r, name=self.name,
             energy_threshold=self.energy_threshold,
+            r_primary=new_primary,
+            r_sup=new_sup,
         )
 
     def modes_for_energy(self, level: float) -> int:
@@ -275,15 +330,21 @@ class PODBasis:
             Phi=self.Phi, sigmas=self.sigmas, cum_energy=self.cum_energy,
             r=np.array(self.r), name=np.array(self.name),
             energy_threshold=np.array(self.energy_threshold),
+            r_primary=np.array(self.r_primary),
+            r_sup=np.array(self.r_sup),
         )
 
     @classmethod
     def load(cls, path: Path) -> "PODBasis":
         d = np.load(path, allow_pickle=False)
+        keys = set(d.files)
+        r_primary = int(d["r_primary"]) if "r_primary" in keys else int(d["r"])
+        r_sup = int(d["r_sup"]) if "r_sup" in keys else 0
         return cls(
             Phi=d["Phi"], sigmas=d["sigmas"], cum_energy=d["cum_energy"],
             r=int(d["r"]), name=str(d["name"]),
             energy_threshold=float(d["energy_threshold"]),
+            r_primary=r_primary, r_sup=r_sup,
         )
 
 

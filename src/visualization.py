@@ -139,24 +139,33 @@ class Visualizer:
     # Plot 4: POD modes
     # =====================================================================
     def plot_pod_modes(self, Phi_u: np.ndarray, Phi_p: np.ndarray,
+                       n_u: int = 4, n_p: int = 2,
                        filename: str = "04_pod_modes.png") -> Path:
-        fig, axes = plt.subplots(2, 3, figsize=(14, 8))
-        cells = [axes[0, 0], axes[0, 1], axes[0, 2],
-                 axes[1, 0], axes[1, 1], axes[1, 2]]
-        titles = [f"Velocity POD mode {k+1}" for k in range(4)] + \
-                 [f"Pressure POD mode {k+1}" for k in range(2)]
-        for k, ax in enumerate(cells):
-            if k < 4:
-                umag = self.velocity_magnitude(Phi_u[:, k])
-                cs = ax.tricontourf(self.triang, umag, levels=20, cmap="viridis")
-            else:
-                pval = self.pressure_vertex_values(Phi_p[:, k - 4])
-                vmax = float(np.max(np.abs(pval))) or 1.0
-                cs = ax.tricontourf(self.triang, pval, levels=20, cmap="RdBu_r",
-                                    vmin=-vmax, vmax=vmax)
+        n_u = min(n_u, Phi_u.shape[1])
+        n_p = min(n_p, Phi_p.shape[1])
+        n_total = n_u + n_p
+        ncols = min(n_total, 3)
+        nrows = (n_total + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+        axes_flat = np.array(axes).ravel()
+        for k in range(n_u):
+            ax = axes_flat[k]
+            umag = self.velocity_magnitude(Phi_u[:, k])
+            cs = ax.tricontourf(self.triang, umag, levels=20, cmap="viridis")
             plt.colorbar(cs, ax=ax)
-            ax.set_title(titles[k])
+            ax.set_title(f"Velocity POD mode {k + 1}")
             ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_aspect("equal")
+        for k in range(n_p):
+            ax = axes_flat[n_u + k]
+            pval = self.pressure_vertex_values(Phi_p[:, k])
+            vmax = float(np.max(np.abs(pval))) or 1.0
+            cs = ax.tricontourf(self.triang, pval, levels=20, cmap="RdBu_r",
+                                vmin=-vmax, vmax=vmax)
+            plt.colorbar(cs, ax=ax)
+            ax.set_title(f"Pressure POD mode {k + 1}")
+            ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_aspect("equal")
+        for ax in axes_flat[n_total:]:
+            ax.set_visible(False)
         fig.suptitle("Leading POD modes", fontsize=15)
         fig.tight_layout()
         out = self._savepath(filename)
