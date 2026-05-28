@@ -275,6 +275,50 @@ class Visualizer:
         return out
 
     # =====================================================================
+    # Plot 10: mode comparison (errors + speedup across all mode counts)
+    # =====================================================================
+    def plot_mode_comparison(self, Nrs: np.ndarray,
+                             sweep_u: np.ndarray, sweep_p: np.ndarray,
+                             sweep_h1_u: np.ndarray, sweep_speedups: np.ndarray,
+                             filename: str = "10_mode_comparison.png") -> Path:
+        fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+
+        axes[0, 0].semilogy(Nrs, sweep_u, "o-", color="C0", linewidth=1.8, markersize=6)
+        axes[0, 0].set_xlabel("Velocity modes $r_u$")
+        axes[0, 0].set_ylabel("Mean relative $L^2$ error")
+        axes[0, 0].set_title("Velocity $L^2$ error")
+        axes[0, 0].set_xticks(Nrs)
+        axes[0, 0].grid(True, which="both", alpha=0.4)
+
+        axes[0, 1].semilogy(Nrs, sweep_p, "s-", color="C1", linewidth=1.8, markersize=6)
+        axes[0, 1].set_xlabel("Velocity modes $r_u$")
+        axes[0, 1].set_ylabel("Mean relative $L^2$ error")
+        axes[0, 1].set_title("Pressure $L^2$ error")
+        axes[0, 1].set_xticks(Nrs)
+        axes[0, 1].grid(True, which="both", alpha=0.4)
+
+        axes[1, 0].semilogy(Nrs, sweep_h1_u, "^-", color="C2", linewidth=1.8, markersize=6)
+        axes[1, 0].set_xlabel("Velocity modes $r_u$")
+        axes[1, 0].set_ylabel("Mean relative $H^1$ error")
+        axes[1, 0].set_title("Velocity $H^1$ error")
+        axes[1, 0].set_xticks(Nrs)
+        axes[1, 0].grid(True, which="both", alpha=0.4)
+
+        axes[1, 1].plot(Nrs, sweep_speedups, "D-", color="C3", linewidth=1.8, markersize=6)
+        axes[1, 1].set_xlabel("Velocity modes $r_u$")
+        axes[1, 1].set_ylabel("Online speedup factor")
+        axes[1, 1].set_title("Online speedup")
+        axes[1, 1].set_xticks(Nrs)
+        axes[1, 1].grid(True, alpha=0.4)
+
+        fig.suptitle("ROM accuracy and speedup vs number of modes", fontsize=14)
+        fig.tight_layout()
+        out = self._savepath(filename)
+        fig.savefig(out, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        return out
+
+    # =====================================================================
     # Plot 9: Newton convergence
     # =====================================================================
     def plot_newton_convergence(self, fom_residuals: List[float],

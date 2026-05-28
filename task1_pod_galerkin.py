@@ -146,26 +146,66 @@ def main() -> None:
 
     # --- 9. Error-vs-modes sweep ------------------------------------
     max_Nr = min(operators.r_u, 40)
-    Nrs = np.arange(2, max_Nr + 1, 2)
-    sweep_u, sweep_p = [], []
+    Nrs = np.arange(1, max_Nr + 1)          # every mode count from 1 to r_u_total
+    sweep_u, sweep_p, sweep_max_u, sweep_h1_u = [], [], [], []
+    sweep_rom_times, sweep_speedups = [], []
     for Nr in tqdm(Nrs, desc="Error sweep"):
-        Np_s = min(Nr, operators.r_p)
-        sub_pod_u = pod_u.truncate(Nr)
+        Np_s = min(int(Nr), operators.r_p)
+        sub_pod_u = pod_u.truncate(int(Nr))
         sub_pod_p = pod_p.truncate(Np_s)
-        sub_ops = operators.truncate(Nr, Np_s)
+        sub_ops = operators.truncate(int(Nr), Np_s)
         sub_rom = ROMSolver(problem, sub_ops, sub_pod_u.Phi, sub_pod_p.Phi)
-        eu_list, ep_list = [], []
+        eu_list, ep_list, eh_list, t_list = [], [], [], []
         for i in range(M_test):
             mu0, mu1 = test_params[i]
             r = sub_rom.solve(mu0, mu1)
+            t_list.append(r.solve_time)
             u_r, p_r = sub_rom.reconstruct(r.a, r.b)
-            eu, ep, _ = err_analyzer.relative_errors(
+            eu, ep, eh = err_analyzer.relative_errors(
                 fom_u_test[:, i], fom_p_test[:, i], u_r, p_r,
             )
-            eu_list.append(eu); ep_list.append(ep)
-        sweep_u.append(np.mean(eu_list))
-        sweep_p.append(np.mean(ep_list))
-    sweep_u = np.array(sweep_u); sweep_p = np.array(sweep_p)
+            eu_list.append(eu); ep_list.append(ep); eh_list.append(eh)
+        sweep_u.append(float(np.mean(eu_list)))
+        sweep_p.append(float(np.mean(ep_list)))
+        sweep_max_u.append(float(np.max(eu_list)))
+        sweep_h1_u.append(float(np.mean(eh_list)))
+        mean_t = float(np.mean(t_list))
+        sweep_rom_times.append(mean_t)
+        sweep_speedups.append(fom_times_test.mean() / max(mean_t, 1e-12))
+    sweep_u      = np.array(sweep_u)
+    sweep_p      = np.array(sweep_p)
+    sweep_max_u  = np.array(sweep_max_u)
+    sweep_h1_u   = np.array(sweep_h1_u)
+    sweep_rom_times  = np.array(sweep_rom_times)
+    sweep_speedups   = np.array(sweep_speedups)
+
+    # --- Print comparison table ---
+    fom_mean_t = fom_times_test.mean()
+    print(f"\nMode comparison table (FOM mean time = {fom_mean_t:.3f} s, "
+          f"{M_test} test samples):")
+    hdr = (f"{'r_u':>4} {'r_p':>4} {'L2(u)mean':>11} {'L2(u)max':>11} "
+           f"{'L2(p)mean':>11} {'H1(u)mean':>11} {'ROMtime(s)':>11} {'Speedup':>9}")
+    print(hdr)
+    print("-" * len(hdr))
+    for i, Nr in enumerate(Nrs):
+        Np_s = min(int(Nr), operators.r_p)
+        print(f"{Nr:>4} {Np_s:>4} {sweep_u[i]:>11.3e} {sweep_max_u[i]:>11.3e} "
+              f"{sweep_p[i]:>11.3e} {sweep_h1_u[i]:>11.3e} "
+              f"{sweep_rom_times[i]:>11.4f} {sweep_speedups[i]:>8.1f}x")
+
+    # --- Save comparison table as CSV ---
+    import csv
+    csv_path = config.data_dir / "mode_comparison.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["r_u", "r_p", "mean_l2_u", "max_l2_u",
+                    "mean_l2_p", "mean_h1_u", "rom_time_s", "speedup"])
+        for i, Nr in enumerate(Nrs):
+            Np_s = min(int(Nr), operators.r_p)
+            w.writerow([int(Nr), Np_s, sweep_u[i], sweep_max_u[i],
+                        sweep_p[i], sweep_h1_u[i],
+                        sweep_rom_times[i], sweep_speedups[i]])
+    print(f"Mode comparison table saved to: {csv_path}")
 
     # --- 10. Representative Newton residual histories (Plot 9) ------
     rep_idx = int(np.argsort(test_params[:, 0])[0])    # smallest mu0 (hardest)
@@ -194,6 +234,7 @@ def main() -> None:
     vis.plot_pod_modes(pod_u.Phi, pod_p.Phi)
     vis.plot_rom_vs_fom(test_params, fom_u_test, rom_u_test)
     vis.plot_error_vs_modes(Nrs, sweep_u, sweep_p)
+    vis.plot_mode_comparison(Nrs, sweep_u, sweep_p, sweep_h1_u, sweep_speedups)
     vis.plot_error_parameter_space(test_params, report.rel_l2_u)
     vis.plot_speedup(fom_times_test.mean(), rom_times_test.mean(), t_offline)
     vis.plot_newton_convergence(fom_track.residuals or [], rom_track.residuals)
@@ -231,6 +272,8 @@ def main() -> None:
     np.savez_compressed(
         config.data_dir / "error_sweep.npz",
         Nrs=Nrs, mean_u=sweep_u, mean_p=sweep_p,
+        max_u=sweep_max_u, mean_h1_u=sweep_h1_u,
+        rom_times=sweep_rom_times, speedups=sweep_speedups,
     )
     np.savez_compressed(
         config.data_dir / "test_errors.npz",

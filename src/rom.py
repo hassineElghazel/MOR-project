@@ -167,6 +167,8 @@ class ROMSolver:
 
     # ---- forcing (mu1-dependent piece) ----
     def assemble_forcing(self, mu1: float) -> np.ndarray:
+        # Non-affine forcing: must assemble FEM vector online for each mu1.
+        # This cost is part of the true online budget and must be timed.
         f_h = self.problem.assemble_forcing_vector(mu1)
         return self.Phi_u.T @ f_h
 
@@ -182,10 +184,13 @@ class ROMSolver:
         op = self.operators
         a = np.zeros(op.r_u) if a_init is None else a_init.copy()
         b = np.zeros(op.r_p) if b_init is None else b_init.copy()
+
+        # Timer starts here — includes forcing assembly, which is a genuine
+        # online cost for non-affine parameter dependence (no offline precompute).
+        t0 = time.time()
         f_r = self.assemble_forcing(mu1)
 
         residuals: List[float] = []
-        t0 = time.time()
         res0 = None
         n_iter = 0
         for it in range(max_iter):

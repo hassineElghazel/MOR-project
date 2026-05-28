@@ -20,7 +20,7 @@ class Config:
     """Global hyperparameters and output paths."""
 
     # --- mesh / FE ---
-    mesh_n: int = 32                       # MxN UnitSquareMesh resolution
+    mesh_n: int = 64                       # MxN UnitSquareMesh resolution
     velocity_degree: int = 2               # P2 velocity
     pressure_degree: int = 1               # P1 pressure  (Taylor-Hood)
 
