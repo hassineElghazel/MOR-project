@@ -26,6 +26,7 @@ import matplotlib.tri as mtri
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers the '3d' projection)
 
 from .problem import NavierStokesProblem
 
@@ -791,3 +792,40 @@ class Visualizer:
         fig.suptitle("Task 4 -- PINN vs ROM vs PODNN vs FOM", fontsize=14)
         out = self._savepath(filename)
         return self._finish(fig, out)
+
+    # =====================================================================
+    # Plot 25: 3D error surfaces over the (mu0, mu1) test-parameter plane
+    # =====================================================================
+    def plot_error_surface_3d(self, test_params: np.ndarray,
+                              rom_error: np.ndarray, podnn_error: np.ndarray,
+                              metric_name: str = "rel $L^2(u)$ error",
+                              filename: str = "25_error_surface_3d.png") -> Path:
+        """Side-by-side 3D error surfaces (Delaunay-triangulated scatter) for
+        ROM and PODNN over the held-out test set's (mu0, mu1) plane.
+
+        Independent z-scale/colorbar per panel -- ROM and PODNN errors differ
+        by roughly an order of magnitude on this basis, so a shared z-axis
+        would flatten the ROM panel into visual noise; the accuracy bar chart
+        (18_comparison_accuracy.png) is where the cross-method magnitude
+        comparison lives, this plot is for spatial error pattern only.
+        """
+        mu0, mu1 = test_params[:, 0], test_params[:, 1]
+        fig = plt.figure(figsize=(14, 6))
+        for i, (label, err) in enumerate([("ROM", rom_error), ("PODNN", podnn_error)]):
+            ax = fig.add_subplot(1, 2, i + 1, projection="3d")
+            surf = ax.plot_trisurf(mu0, mu1, err, cmap="viridis",
+                                   linewidth=0.1, antialiased=True)
+            fig.colorbar(surf, ax=ax, shrink=0.6, pad=0.1)
+            ax.set_xlabel("$\\mu_0$")
+            ax.set_ylabel("$\\mu_1$")
+            ax.set_zlabel(metric_name)
+            ax.set_title(f"{label}: {metric_name}\n"
+                        f"(mean {err.mean():.2e}, max {err.max():.2e})")
+        fig.suptitle("Error surfaces over the test parameter space", fontsize=14)
+        # Not routed through _finish(): sns.despine() assumes 2D-style spines
+        # and errors on Axes3D objects.
+        fig.tight_layout()
+        out = self._savepath(filename)
+        fig.savefig(out, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        return out

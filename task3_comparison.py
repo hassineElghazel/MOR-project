@@ -9,7 +9,7 @@ Task 2 already saved (`test_errors.npz` / `podnn_test_errors.npz`,
 `timing_data.npz` / `podnn_timing.npz`) and tabulates/plots them. Both
 methods were built (see the header comments of `task1_pod_galerkin.py` and
 `task2_podnn.py`) to be directly, index-for-index comparable:
-  - identical 15 held-out test parameters, identical FOM ground truth
+  - identical held-out test parameters, identical FOM ground truth
   - identical error machinery (`ErrorAnalyzer`, same FE mass/stiffness
     matrices), identical natural test-index row order
   - identical POD basis (PODNN reconstructs from the same primary velocity
@@ -116,7 +116,7 @@ def main() -> None:
     podnn_speedup = fom_mean / max(podnn_mean, 1e-12)
 
     print("\n" + "-" * 64)
-    print("ACCURACY (relative to FOM, mean over 15 held-out test points)")
+    print(f"ACCURACY (relative to FOM, mean over {M_test} held-out test points)")
     print("-" * 64)
     print(f"{'metric':<14}{'ROM':>14}{'PODNN':>14}")
     for key, label in [("mean_l2_u", "rel L2(u)"), ("mean_l2_p", "rel L2(p)"),
@@ -154,7 +154,7 @@ def main() -> None:
           "pays a non-affine forcing FEM assembly online (mu1-dependent, "
           "O(N_h)); PODNN pays zero FEM cost online (one NN forward pass + "
           "basis matvec) but its accuracy is capped by how well a small net "
-          "can regress POD coefficients from only 160 training snapshots -- "
+          f"can regress POD coefficients from only {config.n_train()} training snapshots -- "
           "not by the POD basis itself (PODNN's own POD-truncation-floor "
           "diagnostic in Task 2 shows the achievable floor is close to ROM's "
           "actual error).")
