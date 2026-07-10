@@ -93,6 +93,19 @@ class ROMOperators:
             r_u=r_u, r_p=r_p, assembly_time=0.0,
         )
 
+    # ---- truncation by explicit (possibly non-contiguous) column indices ----
+    def truncate_indices(self, u_idx: np.ndarray, p_idx: np.ndarray) -> "ROMOperators":
+        """Select arbitrary velocity/pressure mode indices (e.g. paired
+        primary+supremizer growth, which is not a contiguous prefix)."""
+        u_idx = np.asarray(u_idx, dtype=int)
+        p_idx = np.asarray(p_idx, dtype=int)
+        return ROMOperators(
+            A_r=self.A_r[np.ix_(u_idx, u_idx)].copy(),
+            B_r=self.B_r[np.ix_(p_idx, u_idx)].copy(),
+            C_r=self.C_r[np.ix_(u_idx, u_idx, u_idx)].copy(),
+            r_u=u_idx.size, r_p=p_idx.size, assembly_time=0.0,
+        )
+
     # ---- I/O ----
     def save(self, path: Path) -> None:
         np.savez_compressed(
@@ -214,7 +227,16 @@ class ROMSolver:
                 [J_uu, -op.B_r.T],
                 [op.B_r, np.zeros((op.r_p, op.r_p))],
             ])
-            delta = la.solve(J, -R)
+            try:
+                delta = la.solve(J, -R)
+            except la.LinAlgError:
+                # Singular reduced Jacobian (e.g. an inf-sup-unstable
+                # truncation with no supremizer modes, or a poorly
+                # conditioned cold start) -- fall back to the minimum-norm
+                # least-squares solution instead of hard-crashing the whole
+                # run. The resulting large residual/error is itself the
+                # diagnostic signal in the unstable-truncation case.
+                delta, *_ = la.lstsq(J, -R)
             a += delta[: op.r_u]
             b += delta[op.r_u:]
             n_iter = it + 1
