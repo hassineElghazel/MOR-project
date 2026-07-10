@@ -9,15 +9,27 @@ FEniCS P2 VectorElement stores DOFs in interleaved order (u1/u2 alternating).
 Confirmed by V.sub(0).dofmap().dofs() returning only even global indices.
 We use parent_dofs_0/parent_dofs_1 to scatter predictions into correct slots.
 
-== Training strategy ==
-Two-phase curriculum with properly scaled losses:
-  Phase 1 (warmup):  lambda_p=0, lambda_b=1   -> drive MSE_b to ~1e-6
-  Phase 2 (physics): lambda_p=1, lambda_b=100 -> keep boundary enforced while
-           reducing the normalised physics residual.
+== Loss (exactly the project spec) ==
+    MSE = MSE_b + lambda * MSE_p
+MSE_b = boundary term (no-slip u=0 on dOmega, + pressure pin p(0,0)=0);
+MSE_p = mean squared steady-NS residual over Omega x P, normalised by a FIXED
+        reference forcing scale (a constant folded into lambda -- see
+        PINNModel.f_ref2), so MSE_p is O(1) and lambda stays a single fixed
+        number as the spec intends.
 
-The physics residual MSE_p is normalised by the mean squared forcing inside
-PINNModel.train_step (see src/pinn.py), so it stays O(1) rather than O(2000).
-lambda_b=100 then ensures the boundary term stays 100x heavier than physics.
+== Training strategy ==
+Two-phase curriculum, expressed through the spec's single lambda:
+  Phase 1 (warmup):  lambda = 0            -> boundary-only, drive MSE_b -> ~0
+  Phase 2 (physics): lambda = LAMBDA_PHYS  -> add physics while the boundary
+           term (weight 1) keeps the no-slip BC enforced.
+
+== Spectral-bias fix ==
+The spatial input x is embedded through random Fourier features
+gamma(x)=[x, sin(2*pi*Bx), cos(2*pi*Bx)] (see src/pinn.py). A plain tanh MLP
+cannot represent the solution's high-frequency structure (forcing ~
+cos(mu1^2*pi*x), ~4.5 oscillations at mu1=3) and collapses to ~0 (98.5%
+error); the embedding is a pure input transform that leaves the spec loss and
+residual unchanged.
 
 Run with:
     python task4_pinn.py
@@ -35,24 +47,31 @@ from src.pinn import sample_collocation_points
 from src.analysis import ErrorAnalyzer
 
 # -----------------------------------------------------------------------
-# Hyper-parameters (Maxed out for brute-force test)
+# Hyper-parameters
 # -----------------------------------------------------------------------
-HIDDEN_SIZES = [128, 128, 128, 128]
+HIDDEN_SIZES = [96, 96, 96]
 
-WARMUP_EPOCHS  = 4_000     # Phase 1: boundary only
-PHYSICS_EPOCHS = 16_000    # Phase 2: full PINN
+N_FOURIER     = 32         # random Fourier features for the spatial input
+FOURIER_SIGMA = 4.0        # freq spread; covers forcing freq up to ~mu1^2=9
+
+WARMUP_EPOCHS  = 1_500     # Phase 1: boundary only (lambda = 0)
+PHYSICS_EPOCHS = 6_000     # Phase 2: full PINN  (lambda = LAMBDA_PHYS)
 TOTAL_EPOCHS   = WARMUP_EPOCHS + PHYSICS_EPOCHS
 
 LR_WARMUP  = 5e-4
 LR_PHYSICS = 1e-3
-LAMBDA_P   = 1.0           # physics weight (MSE_p already normalised to O(1))
-LAMBDA_B   = 100.0         # boundary weight >> lambda_p to protect no-slip BC
-H_FD       = 1e-3
+# Spec loss MSE = MSE_b + lambda*MSE_p. Boundary term keeps weight 1; the
+# physics weight lambda is < 1 so the no-slip BC is enforced strongly enough
+# to avoid the trivial u=0 attractor while the (fixed-normalised) physics
+# residual is minimised.
+LAMBDA_PHYS = 1.0e-4   # physics weight; smaller because MSE_p uses per-sample
+                       # relative-residual normalisation (larger absolute scale)
+H_FD        = 1e-3
 
-N_INTERIOR = 8_000
-N_BOUNDARY = 2_000
-N_PIN      = 800
-LOG_EVERY  = 1_000
+N_INTERIOR = 2_000
+N_BOUNDARY = 800
+N_PIN      = 300
+LOG_EVERY  = 500
 
 SEED = 42
 
@@ -117,16 +136,18 @@ def main() -> None:
     assert np.all(parent_dofs_1 % 2 == 1), "Expected u1 DOFs at odd indices"
     print(f"DOF layout: interleaved (u1=even, u2=odd) ✓  n_scalar={dof_coords_u.shape[0]}")
     print(f"Test parameters: {M_test}   Mesh vertices: {N_vert}")
-    print(f"PINN: {[4] + HIDDEN_SIZES + [3]}")
+    _in_dim = 2 + 2 * N_FOURIER + 2
+    print(f"PINN: {[_in_dim] + HIDDEN_SIZES + [3]}  (Fourier features: {N_FOURIER}, sigma={FOURIER_SIGMA})")
     print(f"Training: {WARMUP_EPOCHS} warmup + {PHYSICS_EPOCHS} physics epochs")
-    print(f"  lambda_b={LAMBDA_B}, lambda_p={LAMBDA_P} (MSE_p normalised to O(1))")
+    print(f"  loss = MSE_b + lambda*MSE_p,  lambda={LAMBDA_PHYS}  (MSE_p fixed-normalised to O(1))")
     print(f"  N_int={N_INTERIOR}, N_bnd={N_BOUNDARY}, N_pin={N_PIN}")
 
     # ---------------------------------------------------------------
     # Train: Phase 1 (boundary warmup)
     # ---------------------------------------------------------------
     model = PINNModel(mu0_range=config.mu0_range, mu1_range=config.mu1_range,
-                      hidden_sizes=HIDDEN_SIZES, seed=SEED)
+                      hidden_sizes=HIDDEN_SIZES, seed=SEED,
+                      n_fourier=N_FOURIER, fourier_sigma=FOURIER_SIGMA)
     rng_train = np.random.default_rng(SEED)
     hist_total = np.zeros(TOTAL_EPOCHS)
     hist_b     = np.zeros(TOTAL_EPOCHS)
@@ -138,7 +159,7 @@ def main() -> None:
         coll = sample_collocation_points(N_INTERIOR, N_BOUNDARY, N_PIN,
                                          config.mu0_range, config.mu1_range, rng_train)
         total, lb, lp = model.train_step(coll, LR_WARMUP, lambda_p=0.0, h=H_FD,
-                                          lambda_b=1.0)
+                                          lambda_b=1.0)   # lambda = 0 (spec)
         hist_total[ep] = lb; hist_b[ep] = lb; hist_p[ep] = 0.0
         if ep % LOG_EVERY == 0:
             print(f"  epoch {ep:5d}  MSE_b {lb:.3e}")
@@ -148,17 +169,27 @@ def main() -> None:
     # ---------------------------------------------------------------
     # Train: Phase 2 (full PINN, lambda_b=100 >> lambda_p=1)
     # ---------------------------------------------------------------
-    print(f"\n[Phase 2] Full PINN  (lambda_b={LAMBDA_B}, lambda_p={LAMBDA_P})")
+    print(f"\n[Phase 2] Full PINN  (MSE = MSE_b + lambda*MSE_p, lambda={LAMBDA_PHYS})")
+    err_probe = ErrorAnalyzer(problem)   # for live rel-error monitoring
     t1 = time.time()
     for ep in range(PHYSICS_EPOCHS):
         coll = sample_collocation_points(N_INTERIOR, N_BOUNDARY, N_PIN,
                                          config.mu0_range, config.mu1_range, rng_train)
-        total, lb, lp = model.train_step(coll, LR_PHYSICS, lambda_p=LAMBDA_P,
-                                          h=H_FD, lambda_b=LAMBDA_B)
+        total, lb, lp = model.train_step(coll, LR_PHYSICS, lambda_p=LAMBDA_PHYS,
+                                          h=H_FD, lambda_b=1.0)
         idx = WARMUP_EPOCHS + ep
         hist_total[idx] = total; hist_b[idx] = lb; hist_p[idx] = lp
         if ep % LOG_EVERY == 0:
-            print(f"  epoch {ep:5d}  total {total:.3e}  MSE_b {lb:.3e}  MSE_p {lp:.3e}")
+            # live rel-error on a small fixed subset (10 test pts) so we can
+            # see actual accuracy during training, not just the loss.
+            eu = []
+            for j in range(0, M_test, max(1, M_test // 10)):
+                Uj, Pj = _pinn_dof_vectors(model, test_params[j], parent_dofs_0,
+                                           parent_dofs_1, dof_coords_u, dof_coords_p, N_u, N_p)
+                e, _, _ = err_probe.relative_errors(u_fom_test[:, j], p_fom_test[:, j], Uj, Pj)
+                eu.append(e)
+            print(f"  epoch {ep:5d}  total {total:.3e}  MSE_b {lb:.3e}  "
+                  f"MSE_p {lp:.3e}  ~relL2(u) {np.mean(eu):.3f}")
     t_physics = time.time() - t1
     pinn_train_time = t_warmup + t_physics
     print(f"Phase 2 done in {t_physics:.1f}s")
@@ -267,9 +298,9 @@ def main() -> None:
     print("\n" + "=" * 64)
     print("RESULT SUMMARY")
     print("=" * 64)
-    print(f"PINN:                         {[4] + HIDDEN_SIZES + [3]}")
+    print(f"PINN:                         {model.layer_sizes}  (Fourier {N_FOURIER}/sigma {FOURIER_SIGMA})")
     print(f"Training:                     {WARMUP_EPOCHS} warmup + {PHYSICS_EPOCHS} physics")
-    print(f"lambda_b / lambda_p:          {LAMBDA_B} / {LAMBDA_P}  (MSE_p force-normalised)")
+    print(f"loss:                         MSE_b + lambda*MSE_p,  lambda={LAMBDA_PHYS}")
     print(f"DOF layout:                   interleaved ✓")
     print(f"Mean rel. L2(u):              {pinn_summary['mean_l2_u']:.3e}")
     print(f"Max  rel. L2(u):              {pinn_summary['max_l2_u']:.3e}")

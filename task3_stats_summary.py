@@ -94,12 +94,31 @@ def main() -> None:
         "Task 1 / Task 2 test_params mismatch -- comparison would be invalid"
     M_test = test_params.shape[0]
 
+    # Optional Task 4 (PINN): included only if its artefacts exist AND were
+    # evaluated on the same held-out test params (same ground truth, same
+    # error machinery). PINN is unsupervised/physics-only, so it is expected
+    # to be the least accurate -- reported honestly, not hidden.
+    pinn_err = pinn_timing = None
+    try:
+        _pe = np.load(config.data_dir / "pinn_test_errors.npz")
+        _pt = np.load(config.data_dir / "pinn_timing.npz")
+        if _pe["test_params"].shape == test_params.shape and \
+                np.allclose(_pe["test_params"], test_params):
+            pinn_err, pinn_timing = _pe, _pt
+        else:
+            print("  [warn] PINN test_params differ from ROM/PODNN -- excluding PINN "
+                  "(re-run task4_pinn.py against the current test set).")
+    except FileNotFoundError:
+        print("  [info] No PINN artefacts found -- reporting ROM/PODNN only.")
+
     # --- 2. Accuracy stats table -------------------------------------------
     metrics = [("rel_l2_u", "rel L2(u)"), ("rel_l2_p", "rel L2(p)"), ("rel_h1_u", "rel H1(u)")]
     accuracy_rows = {}
     accuracy_rows["FOM (ref)"] = {m: compute_stats(np.zeros(M_test)) for m, _ in metrics}
     accuracy_rows["ROM"] = {m: compute_stats(rom_err[m]) for m, _ in metrics}
     accuracy_rows["PODNN"] = {m: compute_stats(podnn_err[m]) for m, _ in metrics}
+    if pinn_err is not None:
+        accuracy_rows["PINN"] = {m: compute_stats(pinn_err[m]) for m, _ in metrics}
 
     for metric_key, metric_label in metrics:
         row_stats = {method: accuracy_rows[method][metric_key] for method in accuracy_rows}
@@ -132,6 +151,13 @@ def main() -> None:
         "PODNN online": compute_stats(podnn_online),
         "PODNN offline": compute_stats(podnn_offline),
     }
+    if pinn_err is not None:
+        # PINN offline = training only. Unlike ROM/PODNN it needs NO FOM
+        # snapshots or POD basis, so there is no shared_offline component --
+        # its offline cost is genuinely standalone (reported as such).
+        cost_rows["PINN online"] = compute_stats(pinn_timing["predict_times"])
+        cost_rows["PINN offline"] = compute_stats(
+            np.array([float(pinn_timing["train_time"])]))
     print_table("COMPUTATIONAL COST (seconds)", cost_rows)
 
     cost_csv = config.data_dir / "stats_summary_cost.csv"
