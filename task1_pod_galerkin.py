@@ -294,7 +294,8 @@ def main() -> None:
         labels=["Low viscosity", "Medium viscosity", "High viscosity"],
     )
     vis.plot_singular_values(pod_u.sigmas, pod_p.sigmas, config.energy_threshold)
-    vis.plot_cumulative_energy(pod_u.sigmas, pod_p.sigmas, pod_u.r, pod_p.r)
+    vis.plot_cumulative_energy(pod_u.sigmas, pod_p.sigmas,
+                               pod_u.r_primary, pod_p.r, r_u_sup=pod_u.r_sup)
     vis.plot_pod_modes(pod_u.Phi, pod_p.Phi)
     vis.plot_rom_vs_fom(test_params, fom_u_test, rom_u_test)
     vis.plot_error_vs_modes(Nrs, sweep_u, sweep_p)

@@ -159,35 +159,51 @@ class Visualizer:
     # Plot 3: cumulative energy
     # =====================================================================
     def plot_cumulative_energy(self, sigmas_u: np.ndarray, sigmas_p: np.ndarray,
-                               r_u: int, r_p: int,
+                               r_u: int, r_p: int, r_u_sup: int = 0,
                                filename: str = "03_cumulative_energy.png") -> Path:
+        """Cumulative POD energy of the *snapshot* SVD spectra.
+
+        ``r_u`` is the number of **primary** velocity modes -- the point at
+        which the energy threshold is actually reached on the velocity
+        snapshot-SVD curve. ``r_u_sup`` (if > 0) is the number of *supremizer*
+        enrichment modes appended to the velocity basis: they enforce the
+        reduced inf-sup (LBB) stability of the Galerkin saddle-point system and
+        are **not** drawn from this energy budget, so the full velocity basis
+        has ``r_u + r_u_sup`` columns while only the first ``r_u`` sit on this
+        curve. Marking both avoids conflating stability enrichment with
+        energy-optimal truncation.
+        """
         eu = np.cumsum(sigmas_u ** 2) / np.sum(sigmas_u ** 2)
         ep = np.cumsum(sigmas_p ** 2) / np.sum(sigmas_p ** 2)
-        df = pd.concat([
-            pd.DataFrame({"mode": np.arange(1, len(eu) + 1),
-                          "energy": eu, "field": "Velocity"}),
-            pd.DataFrame({"mode": np.arange(1, len(ep) + 1),
-                          "energy": ep, "field": "Pressure"}),
-        ], ignore_index=True)
+        pal = sns.color_palette(_PALETTE)
+
+        # zoom in on the part that matters: the elbow + the mode markers,
+        # dropping the long flat tail out to 1500 modes on the right.
+        xmax = max(r_u, r_p) + 6
+        modes_u = np.arange(1, len(eu) + 1)
+        modes_p = np.arange(1, len(ep) + 1)
 
         fig, ax = plt.subplots(figsize=(8, 5.5))
-        sns.lineplot(data=df, x="mode", y="energy", hue="field", style="field",
-                    markers=False, dashes=False, linewidth=1.5, ax=ax)
-        for lvl in (0.99, 0.999, 0.9999):
-            ax.axhline(lvl, ls="--", color="grey", alpha=0.5)
-            ax.text(max(r_u, r_p) * 0.7, lvl + 0.0005, f"{lvl*100:.2f}%",
-                    color="grey", fontsize=9)
-        ax.axvline(r_u, ls=":", color=sns.color_palette(_PALETTE)[0],
-                   alpha=0.8, label=f"$r_u={r_u}$")
-        ax.axvline(r_p, ls=":", color=sns.color_palette(_PALETTE)[1],
-                   alpha=0.8, label=f"$r_p={r_p}$")
+        ax.plot(modes_u, eu, color=pal[0], linewidth=2.0, label="Velocity")
+        ax.plot(modes_p, ep, color=pal[1], linewidth=2.0, label="Pressure")
+
+        # single reference line: the 99.99% energy criterion actually used
+        thr = 0.9999
+        ax.axhline(thr, ls="--", color="grey", alpha=0.6, zorder=0)
+        ax.text(0.4, thr - 0.0006, "99.99% energy criterion",
+                color="grey", fontsize=9, va="top")
+
+        # velocity/pressure: the energy criterion is met at these mode counts
+        ax.axvline(r_u, ls=":", color=pal[0], alpha=0.9, label=f"$r_u={r_u}$")
+        ax.axvline(r_p, ls=":", color=pal[1], alpha=0.9, label=f"$r_p={r_p}$")
+
         ax.set_xlabel("Number of modes")
         ax.set_ylabel("Cumulative energy")
         ax.set_title("Cumulative POD energy")
-        ax.set_ylim(0.9, 1.001)
-        ax.set_xlim(0, max(r_u, r_p) + 20)
+        ax.set_ylim(0.9955, 1.001)
+        ax.set_xlim(0, xmax)
         handles, lbls = ax.get_legend_handles_labels()
-        ax.legend(handles, lbls, title=None)
+        ax.legend(handles, lbls, title=None, loc="lower right")
         out = self._savepath(filename)
         return self._finish(fig, out)
 
@@ -858,3 +874,75 @@ class Visualizer:
         fig.savefig(out, dpi=200, bbox_inches="tight")
         plt.close(fig)
         return out
+
+    # =====================================================================
+    # Plot 26: PINN residual-vs-error divergence (Task 4)
+    # =====================================================================
+    def plot_pinn_loss_vs_error(self, iters: np.ndarray, loss: np.ndarray,
+                                err: np.ndarray, switch_iter: Optional[int] = None,
+                                filename: str = "26_pinn_loss_vs_error.png") -> Path:
+        """Twin-axis diagnostic: the physics loss (log) collapses while the
+        rel L2(u) error plateaus -- minimising the residual does not minimise
+        the error (physics-only PINN, single parameter)."""
+        pal = sns.color_palette(_PALETTE)
+        c_loss, c_err = pal[3], pal[0]              # red-ish, blue
+        fig, ax1 = plt.subplots(figsize=(8.5, 5.5))
+        ax1.plot(iters, np.clip(loss, 1e-30, None), color=c_loss, lw=2.0)
+        ax1.set_yscale("log")
+        ax1.set_xlabel("Optimiser iteration")
+        ax1.set_ylabel("Physics loss  $\\mathrm{MSE}_p$", color=c_loss)
+        ax1.tick_params(axis="y", labelcolor=c_loss)
+
+        ax2 = ax1.twinx()
+        ax2.plot(iters, err, color=c_err, lw=2.4)
+        ax2.set_ylabel("Relative $L^2(u)$ error vs FOM", color=c_err)
+        ax2.tick_params(axis="y", labelcolor=c_err)
+        ax2.set_ylim(0, max(1.0, float(np.max(err)) * 1.05))
+        ax2.axhline(err[-1], color=c_err, ls=":", lw=1.2)
+        ax2.text(iters[len(iters) // 2], err[-1] + 0.04,
+                 f"error plateau $\\approx {err[-1]:.2f}$", color=c_err, fontsize=10)
+
+        if switch_iter is not None:
+            ax1.axvline(switch_iter, color="grey", ls="--", lw=1.2)
+            ax1.text(switch_iter, ax1.get_ylim()[1] * 0.4,
+                     "  Adam $\\to$ L-BFGS", color="grey", fontsize=9.5)
+        ax1.set_title("Physics-only PINN: the residual $\\to 0$ "
+                      "but the error does not")
+        sns.despine(ax=ax1, right=False)
+        fig.tight_layout()
+        out = self._savepath(filename)
+        fig.savefig(out, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        return out
+
+    # =====================================================================
+    # Plot 27: PINN data ablation -- value of the physics term (Task 4)
+    # =====================================================================
+    def plot_pinn_ablation(self, n_snapshots: np.ndarray, dataonly: np.ndarray,
+                           hybrid: np.ndarray, rom_ref: Optional[float] = None,
+                           podnn_ref: Optional[float] = None,
+                           filename: str = "27_pinn_ablation.png") -> Path:
+        """Mean rel L2(u) on the disjoint test set vs. number of FOM training
+        snapshots, for the data-only and physics+data (hybrid) PINNs. The gap
+        at small N is the contribution of the physics term."""
+        df = pd.concat([
+            pd.DataFrame({"N": n_snapshots, "error": dataonly, "method": "Data-only PINN"}),
+            pd.DataFrame({"N": n_snapshots, "error": hybrid, "method": "Hybrid (physics + data)"}),
+        ], ignore_index=True)
+        fig, ax = plt.subplots(figsize=(8.5, 5.5))
+        sns.lineplot(data=df, x="N", y="error", hue="method", style="method",
+                     markers=True, dashes=False, markersize=9, linewidth=2.0, ax=ax)
+        ax.set_xscale("log"); ax.set_yscale("log")
+        pal = sns.color_palette(_PALETTE)
+        if podnn_ref is not None:
+            ax.axhline(podnn_ref, color=pal[2], ls="--", lw=1.4,
+                       label="POD-NN (data-driven, 1500 snap.)")
+        if rom_ref is not None:
+            ax.axhline(rom_ref, color=pal[3], ls=":", lw=1.4, label="ROM (Galerkin)")
+        ax.set_xlabel("Number of FOM training snapshots $N$")
+        ax.set_ylabel("Mean rel. $L^2(u)$ on 150 disjoint test params")
+        ax.set_title("PINN data ablation: physics helps only in the "
+                     "data-starved regime")
+        ax.legend(title=None, fontsize=9.5)
+        out = self._savepath(filename)
+        return self._finish(fig, out)
